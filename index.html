@@ -141,6 +141,10 @@ function setKey(code, down) {
   keys[code] = down;
 }
 
+function jitteredCutterInterval(lp) {
+  return Math.max(1.5, lp.cutterEvery + (Math.random() * 4 - 2));  // +/- 2s
+}
+
 function levelParams(day) {
   return {
     lineLen: 6 + day * 2,                         // 8,10,12,...
@@ -166,7 +170,7 @@ function newDay(day) {
   G.meters = { patience: 100, hunger: 100, bladder: 100, battery: 100 };
   G.serveTimer = lp.serveInterval;
   G.cutters = [];
-  G.cutterTimer = lp.cutterEvery;
+  G.cutterTimer = jitteredCutterInterval(lp);
   G.spotHeld = 0;
   G.reading = false;
   G.readTimer = 0;
@@ -408,7 +412,7 @@ function updatePlay(dt) {
   if (lp.cutters > 0 && !frozen) {
     G.cutterTimer -= dt;
     if (G.cutterTimer <= 0 && G.cutters.length < lp.cutters) {
-      G.cutterTimer = lp.cutterEvery;
+      G.cutterTimer = jitteredCutterInterval(lp);
       spawnCutter();
     }
     for (const c of G.cutters) {
