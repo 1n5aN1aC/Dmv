@@ -148,7 +148,7 @@ function levelParams(day) {
     drain: 1 + (day - 1) * 0.14,
     bladderDrain: 1 + (day >= 3 ? (day - 2) * 0.35 : 0),
     cutters: day <= 1 ? 0 : Math.min(3, 1 + Math.floor((day - 2) / 1)),
-    cutterEvery: Math.max(4.5, 9 - (day - 2) * 1.1),
+    cutterEvery: Math.max(5.5, 15 - (day - 2) * 1.5),
     systemDown: day >= 5,
   };
 }
@@ -166,7 +166,7 @@ function newDay(day) {
   G.meters = { patience: 100, hunger: 100, bladder: 100, battery: 100 };
   G.serveTimer = lp.serveInterval;
   G.cutters = [];
-  G.cutterTimer = lp.cutterEvery * 0.7;
+  G.cutterTimer = lp.cutterEvery;
   G.spotHeld = 0;
   G.reading = false;
   G.readTimer = 0;
