@@ -349,7 +349,7 @@ function updatePlay(dt) {
     if (pressed("KeyZ")) {
       if (m.battery > 0 && G.textCd <= 0) {
         G.textCd = 1.1; m.battery -= 8;
-        m.patience = Math.min(100, m.patience + 4);
+        m.patience = Math.min(100, m.patience + 8);
         addScore(10, G.player.x, G.player.y - 16);
       } else if (m.battery <= 0) {
         toast("phone dead", G.player.x, G.player.y - 16, "#f08a8a", 1.0);
@@ -361,7 +361,7 @@ function updatePlay(dt) {
   const away = !onSpot();
   m.patience -= dt * (away ? 1.6 : 2.4) * lp.drain * (frozen ? 1.7 : 1);  // bored in place
   m.hunger   -= dt * 1.0 * lp.drain;
-  if (!G.bath.active) m.bladder -= dt * 1.5 * lp.bladderDrain * lp.drain;
+  if (!G.bath.active) m.bladder -= dt * 0.75 * lp.bladderDrain * lp.drain;
   m.battery  -= dt * 0.5;
   for (const k in m) m[k] = Math.max(0, Math.min(100, m[k]));
 
@@ -458,8 +458,17 @@ function endDay() {
 
 // ------------------------------------------------------------------ render
 function fitCanvas() {
-  SCALE = Math.max(1, Math.floor(Math.min(window.innerWidth / LW, window.innerHeight / LH)));
+  // How big we can display the game on screen (CSS px), preserving aspect ratio.
+  // This can be fractional so small/portrait phones still fill the viewport
+  // instead of being capped at 1x internal scale.
+  const displayScale = Math.max(0.1, Math.min(window.innerWidth / LW, window.innerHeight / LH));
+  // Internal render resolution: an integer multiple (crisp pixel art), boosted
+  // by devicePixelRatio so it stays sharp on high-DPI phone screens.
+  const dpr = window.devicePixelRatio || 1;
+  SCALE = Math.max(1, Math.round(displayScale * dpr));
   canvas.width = LW * SCALE; canvas.height = LH * SCALE;
+  canvas.style.width = (LW * displayScale) + "px";
+  canvas.style.height = (LH * displayScale) + "px";
   ctx.imageSmoothingEnabled = false;
 }
 window.addEventListener("resize", fitCanvas);
