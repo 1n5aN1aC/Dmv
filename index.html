@@ -1,0 +1,664 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>DMV Simulator</title>
+<style>
+  :root { --ink:#e8f0e0; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: #0d0f14; overflow: hidden;
+    font-family: "Courier New", monospace; color: var(--ink);
+    -webkit-user-select: none; user-select: none; touch-action: none;
+  }
+  #wrap {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+  }
+  canvas {
+    image-rendering: pixelated; image-rendering: crisp-edges;
+    background: #1b2230; box-shadow: 0 0 0 2px #000, 0 8px 40px rgba(0,0,0,.6);
+  }
+  /* Touch controls overlay */
+  #touch {
+    position: fixed; inset: 0; pointer-events: none; z-index: 10;
+    opacity: .55;
+  }
+  .btn {
+    position: absolute; pointer-events: auto;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(230,240,220,.10); border: 2px solid rgba(230,240,220,.45);
+    color: #eaf2e2; border-radius: 12px; font-weight: bold; font-size: 20px;
+    -webkit-user-select: none; user-select: none;
+  }
+  .btn:active { background: rgba(230,240,220,.28); }
+  .round { border-radius: 50%; width: 62px; height: 62px; }
+  #dpad { position: absolute; left: 18px; bottom: 20px; width: 168px; height: 168px; }
+  #dpad .btn { width: 54px; height: 54px; }
+  #b-up    { left: 57px;  top: 0; }
+  #b-down  { left: 57px;  top: 114px; }
+  #b-left  { left: 0;     top: 57px; }
+  #b-right { left: 114px; top: 57px; }
+  #acts { position: absolute; right: 18px; bottom: 20px; width: 168px; height: 168px; }
+  #b-use   { right: 0;   bottom: 92px; background: rgba(120,220,140,.16); border-color: rgba(150,240,170,.6); }
+  #b-text  { right: 84px; bottom: 40px; background: rgba(120,180,240,.16); border-color: rgba(150,200,255,.6); }
+  #b-guard { right: 0;   bottom: 8px;  width: 78px; height: 40px; border-radius: 10px; font-size: 14px; background: rgba(240,200,120,.16); border-color: rgba(255,220,150,.6); }
+  #b-start { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); pointer-events: auto;
+    padding: 8px 20px; border-radius: 10px; font-size: 15px; background: rgba(230,240,220,.12); border: 2px solid rgba(230,240,220,.5); color:#eaf2e2; }
+  /* Hide touch UI on devices without touch */
+  @media (hover: hover) and (pointer: fine) { #touch { display: none; } }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="touch">
+  <div id="dpad">
+    <div class="btn" id="b-up"    data-k="ArrowUp">▲</div>
+    <div class="btn" id="b-down"  data-k="ArrowDown">▼</div>
+    <div class="btn" id="b-left"  data-k="ArrowLeft">◀</div>
+    <div class="btn" id="b-right" data-k="ArrowRight">▶</div>
+  </div>
+  <div id="acts">
+    <div class="btn round" id="b-use"   data-k="KeyX">USE</div>
+    <div class="btn round" id="b-text"  data-k="KeyZ">TXT</div>
+    <div class="btn"       id="b-guard" data-k="KeyC">GUARD</div>
+  </div>
+  <div id="b-start" data-k="Enter">START / NEXT</div>
+</div>
+
+<script>
+"use strict";
+(function () {
+// ------------------------------------------------------------------ constants
+const LW = 320, LH = 180;            // logical resolution
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+let SCALE = 3;
+
+const ROOM = { x0: 6, y0: 20, x1: 314, y1: 174 };
+const SPOT_X = 46, SPOT_Y0 = 30, SPOT_DY = 11;   // line geometry
+const PLAYER_SPEED = 64;                          // logical px / sec
+
+// interactables (rects in logical coords)
+const BENCH   = { x: 168, y: 70,  w: 46, h: 14, label: "NEWS" };
+const VENDING = { x: 120, y: 118, w: 24, h: 36, label: "SNACK" };
+const BATH    = { x: 278, y: 116, w: 24, h: 36, label: "WC" };
+
+// ------------------------------------------------------------------ sprites
+// palette indices: 0 transparent,1 skin,2 hair,3 shirt,4 pants,5 shoe,6 eye
+const T=0,K=1,H=2,S=3,P=4,B=5,E=6;
+const PERSON = [
+  [T,T,H,H,H,H,T,T],
+  [T,H,H,H,H,H,H,T],
+  [T,H,K,K,K,K,H,T],
+  [T,K,E,K,K,E,K,T],
+  [T,K,K,K,K,K,K,T],
+  [T,T,K,K,K,K,T,T],
+  [T,S,S,S,S,S,S,T],
+  [S,S,S,S,S,S,S,S],
+  [S,S,S,S,S,S,S,S],
+  [T,P,P,P,P,P,P,T],
+  [T,P,P,T,T,P,P,T],
+  [T,B,B,T,T,B,B,T],
+];
+const PW = 8, PH = 12;
+
+function drawSprite(grid, ox, oy, pal) {
+  for (let r = 0; r < grid.length; r++) {
+    const row = grid[r];
+    for (let cIdx = 0; cIdx < row.length; cIdx++) {
+      const v = row[cIdx];
+      if (v === 0) continue;
+      const col = pal[v];
+      if (!col) continue;
+      ctx.fillStyle = col;
+      ctx.fillRect((ox + cIdx) * SCALE, (oy + r) * SCALE, SCALE, SCALE);
+    }
+  }
+}
+// draw a person anchored by center-x / feet-y
+function drawPerson(cx, feetY, pal, bob) {
+  drawSprite(PERSON, Math.round(cx - PW / 2), Math.round(feetY - PH) + (bob || 0), pal);
+}
+
+// palettes
+const SKIN = ["#f0c39a", "#e2a878", "#c98a5a", "#a86a3c", "#8a5a34"];
+const HAIR = ["#3b2a1a", "#5a3a1a", "#1c1c22", "#7a6a58", "#a03a2a"];
+const SHIRTS = ["#4e88c8", "#5aa06a", "#c85a6a", "#c8a24e", "#8a6ac8", "#4ec8b0", "#c87a4e", "#7a8a9a"];
+function makePal(seed) {
+  const r = (n) => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) % n;
+  return [null, SKIN[r(SKIN.length)], HAIR[r(HAIR.length)], SHIRTS[r(SHIRTS.length)], "#2f3b4c", "#20242c", "#26221e"];
+}
+const PLAYER_PAL = [null, "#f0c39a", "#2a1c10", "#e8d24a", "#324a6a", "#20242c", "#26221e"]; // yellow shirt hero
+const CUTTER_PAL = [null, "#e6b88a", "#221820", "#b0202a", "#2a1620", "#181018", "#26221e"]; // shifty red
+
+// ------------------------------------------------------------------ state
+const keys = {};       // current held state
+const edge = {};       // rising-edge latch, consumed by pressed()
+const G = {};
+function setKey(code, down) {
+  if (down && !keys[code]) edge[code] = true;   // latch the press even if released before next frame
+  keys[code] = down;
+}
+
+function levelParams(day) {
+  return {
+    lineLen: 6 + day * 2,                         // 8,10,12,...
+    serveInterval: Math.max(3.4, 6.2 - (day - 1) * 0.35),
+    drain: 1 + (day - 1) * 0.14,
+    bladderDrain: 1 + (day >= 3 ? (day - 2) * 0.35 : 0),
+    cutters: day <= 1 ? 0 : Math.min(3, 1 + Math.floor((day - 2) / 1)),
+    cutterEvery: Math.max(4.5, 9 - (day - 2) * 1.1),
+    systemDown: day >= 5,
+  };
+}
+
+function newDay(day) {
+  const lp = levelParams(day);
+  const npcs = [];
+  for (let i = 0; i < lp.lineLen; i++) npcs.push(makePal(day * 991 + i * 37 + 7));
+  G.day = day;
+  G.lp = lp;
+  G.lineLen = lp.lineLen;
+  G.npcs = npcs;
+  G.spotIndex = lp.lineLen - 1;         // start at the very back
+  G.player = { x: SPOT_X, y: spotY(lp.lineLen - 1), facing: 1 };
+  G.meters = { patience: 100, hunger: 100, bladder: 100, battery: 100 };
+  G.serveTimer = lp.serveInterval;
+  G.cutters = [];
+  G.cutterTimer = lp.cutterEvery * 0.7;
+  G.spotHeld = 0;
+  G.reading = false;
+  G.readTimer = 0;
+  G.bath = { active: false, t: 0, credited: false };
+  G.textCd = 0;
+  G.vendCd = 0;
+  G.holdCd = 0;
+  G.bladderGrace = 0;
+  G.guarding = false;
+  G.toasts = [];
+  G.dayScore = 0;
+  G.ragequit = false;
+  G.systemDownT = lp.systemDown ? 9 : 0;
+  G.introT = 2.6;
+  G.mode = "play";
+  toast("DAY " + day, 160, 70, "#ffe680", 2.4, true);
+  if (day === 1) toast("Arrows move · X use · Z text", 160, 96, "#bcd", 3.4, true);
+}
+
+function resetGame() {
+  G.score = 0;
+  G.best = G.best || 0;
+  newDay(1);
+}
+
+function spotY(i) { return SPOT_Y0 + i * SPOT_DY; }
+
+function toast(text, x, y, color, life, big) {
+  G.toasts.push({ text, x, y, color: color || "#fff", life: life || 1.1, max: life || 1.1, big: !!big });
+}
+function addScore(n, x, y) {
+  G.score += n; G.dayScore += n;
+  if (x !== undefined) toast((n >= 0 ? "+" : "") + n, x, y, n >= 0 ? "#9ef08a" : "#f08a8a", 1.0);
+}
+
+// ------------------------------------------------------------------ input
+function pressed(code) { if (edge[code]) { edge[code] = false; return true; } return false; }
+
+window.addEventListener("keydown", (e) => {
+  if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Space"].includes(e.code)) e.preventDefault();
+  if (e.repeat) return;
+  setKey(e.code, true);
+  if (e.code === "Space") setKey("Enter", true);
+});
+window.addEventListener("keyup", (e) => {
+  setKey(e.code, false);
+  if (e.code === "Space") setKey("Enter", false);
+});
+
+// touch buttons -> synthesize key state
+document.querySelectorAll("[data-k]").forEach((el) => {
+  const code = el.getAttribute("data-k");
+  const on  = (e) => { e.preventDefault(); setKey(code, true); };
+  const off = (e) => { e.preventDefault(); setKey(code, false); };
+  el.addEventListener("touchstart", on, { passive: false });
+  el.addEventListener("touchend", off, { passive: false });
+  el.addEventListener("touchcancel", off, { passive: false });
+  el.addEventListener("mousedown", on);
+  el.addEventListener("mouseup", off);
+  el.addEventListener("mouseleave", off);
+});
+
+// ------------------------------------------------------------------ helpers
+function nearRect(px, py, r, pad) {
+  pad = pad || 10;
+  return px > r.x - pad && px < r.x + r.w + pad && py > r.y - pad && py < r.y + r.h + pad;
+}
+function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
+function onSpot() { return dist(G.player.x, G.player.y, SPOT_X, spotY(G.spotIndex)) < 12; }
+
+// ------------------------------------------------------------------ update
+let last = performance.now();
+function frame(now) {
+  let dt = (now - last) / 1000; last = now;
+  if (dt > 0.05) dt = 0.05;               // clamp big gaps
+  if (G.mode === "play") updatePlay(dt);
+  else updateScreens(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+
+function updateScreens(dt) {
+  for (const t of G.toasts) t.life -= dt;
+  G.toasts = G.toasts.filter((t) => t.life > 0);
+  if (pressed("Enter")) {
+    if (G.mode === "title") { resetGame(); }
+    else if (G.mode === "dayend") { newDay(G.day + 1); }
+  }
+}
+
+function updatePlay(dt) {
+  const m = G.meters, lp = G.lp;
+
+  // toasts
+  for (const t of G.toasts) t.life -= dt;
+  G.toasts = G.toasts.filter((t) => t.life > 0);
+
+  if (G.introT > 0) { G.introT -= dt; }
+
+  // cooldowns
+  if (G.textCd > 0) G.textCd -= dt;
+  if (G.vendCd > 0) G.vendCd -= dt;
+  if (G.holdCd > 0) G.holdCd -= dt;
+  if (G.spotHeld > 0) G.spotHeld -= dt;
+
+  // "system down" freeze event (later days) — line stalls, patience bleeds
+  const frozen = G.systemDownT > 0;
+  if (frozen) {
+    G.systemDownT -= dt;
+    if (G.systemDownT <= 0) toast("SYSTEM BACK UP", 160, 60, "#9ef08a", 2.0, true);
+  }
+
+  // ---- bathroom sequence ----
+  if (G.bath.active) {
+    G.bath.t -= dt;
+    // meters still tick a bit (except bladder which is being relieved)
+    m.patience -= dt * 0.8 * lp.drain;
+    if (G.bath.t <= 0) {
+      G.bath.active = false;
+      m.bladder = 100;
+      toast("relief!", G.player.x, G.player.y - 16, "#9ef", 1.2);
+    }
+    // during bathroom you cannot act; cutters still resolve below
+  } else if (G.reading) {
+    // ---- reading newspaper ----
+    G.readTimer -= dt;
+    m.patience = Math.min(100, m.patience + dt * 10);   // relaxing
+    if (G.readTimer <= 0) {
+      G.readTimer = 1.8;
+      addScore(25, BENCH.x + BENCH.w / 2, BENCH.y - 8);
+      toast("...interesting...", BENCH.x + BENCH.w / 2, BENCH.y - 18, "#cde", 1.1);
+    }
+    // exit reading on movement (held or tapped) or USE
+    const movedTap = pressed("ArrowUp") | pressed("ArrowDown") | pressed("ArrowLeft") | pressed("ArrowRight");
+    if (movedTap || pressed("KeyX") || keys.ArrowUp || keys.ArrowDown || keys.ArrowLeft || keys.ArrowRight) {
+      G.reading = false;
+    }
+  } else {
+    // ---- normal control ----
+    // guard stance
+    G.guarding = keys.KeyC && onSpot();
+
+    if (!G.guarding) {
+      let dx = 0, dy = 0;
+      if (keys.ArrowLeft) dx -= 1;
+      if (keys.ArrowRight) dx += 1;
+      if (keys.ArrowUp) dy -= 1;
+      if (keys.ArrowDown) dy += 1;
+      if (dx || dy) {
+        const len = Math.hypot(dx, dy) || 1;
+        G.player.x += (dx / len) * PLAYER_SPEED * dt;
+        G.player.y += (dy / len) * PLAYER_SPEED * dt;
+        if (dx) G.player.facing = dx > 0 ? 1 : -1;
+      }
+      G.player.x = Math.max(ROOM.x0 + 4, Math.min(ROOM.x1 - 4, G.player.x));
+      G.player.y = Math.max(ROOM.y0 + 8, Math.min(ROOM.y1 - 1, G.player.y));
+    }
+
+    // USE / interact (edge)
+    if (pressed("KeyX")) {
+      if (nearRect(G.player.x, G.player.y, BENCH)) {
+        G.reading = true; G.readTimer = 0.6;
+      } else if (nearRect(G.player.x, G.player.y, VENDING)) {
+        if (G.vendCd <= 0) {
+          m.hunger = 100; G.vendCd = 6;
+          toast("*crunch* fed", VENDING.x + 12, VENDING.y - 6, "#9ef08a", 1.2);
+        }
+      } else if (nearRect(G.player.x, G.player.y, BATH)) {
+        G.bath.active = true; G.bath.t = 3.4;
+        if (m.bladder < 60) { addScore(75, G.player.x, G.player.y - 16); }
+        else { toast("didn't need to go", G.player.x, G.player.y - 16, "#ccc", 1.2); }
+      } else if (dist(G.player.x, G.player.y, SPOT_X, spotY(G.spotIndex)) < 22 && G.holdCd <= 0) {
+        // ask a neighbor to hold your spot
+        G.spotHeld = 8; G.holdCd = 10;
+        toast('"hold my spot?"', SPOT_X + 10, spotY(G.spotIndex) - 14, "#ffe680", 1.4);
+      }
+    }
+
+    // TEXT (edge)
+    if (pressed("KeyZ")) {
+      if (m.battery > 0 && G.textCd <= 0) {
+        G.textCd = 1.1; m.battery -= 8;
+        m.patience = Math.min(100, m.patience + 4);
+        addScore(10, G.player.x, G.player.y - 16);
+      } else if (m.battery <= 0) {
+        toast("phone dead", G.player.x, G.player.y - 16, "#f08a8a", 1.0);
+      }
+    }
+  }
+
+  // ---- meter drain (always) ----
+  const away = !onSpot();
+  m.patience -= dt * (away ? 1.6 : 2.4) * lp.drain * (frozen ? 1.7 : 1);  // bored in place
+  m.hunger   -= dt * 1.0 * lp.drain;
+  if (!G.bath.active) m.bladder -= dt * 1.5 * lp.bladderDrain * lp.drain;
+  m.battery  -= dt * 0.5;
+  for (const k in m) m[k] = Math.max(0, Math.min(100, m[k]));
+
+  // ---- meter fail consequences ----
+  // hunger / battery: slow point bleed
+  if (m.hunger <= 0) G.bleed = (G.bleed || 0) + dt * 2;
+  if (m.battery <= 0) G.bleed = (G.bleed || 0) + dt * 1;
+  if (G.bleed >= 1) { const n = Math.floor(G.bleed); G.bleed -= n; addScore(-n); }
+
+  // bladder empty -> grace then accident
+  if (m.bladder <= 0 && !G.bath.active) {
+    if (G.bladderGrace === 0) { G.bladderGrace = 5; toast("GOTTA GO!", 160, 54, "#ff8080", 1.6, true); }
+    G.bladderGrace -= dt;
+    if (G.bladderGrace <= 0) {
+      // accident: drop back, penalty, reset bladder
+      dropBack(2, "accident! -2 spots");
+      addScore(-30, G.player.x, G.player.y - 18);
+      m.bladder = 60; G.bladderGrace = 0;
+    }
+  } else if (m.bladder > 0) {
+    G.bladderGrace = 0;
+  }
+
+  // patience empty -> rage quit, day ends
+  if (m.patience <= 0) {
+    G.ragequit = true;
+    endDay();
+    return;
+  }
+
+  // ---- line serve timer ----
+  if (!frozen) {
+    G.serveTimer -= dt;
+    if (G.serveTimer <= 0) {
+      G.serveTimer += G.lp.serveInterval;
+      G.spotIndex -= 1;
+      // pity points flavor
+      if (Math.random() < 0.5) { addScore(5); toast('"Next!" ...not you.  +5', 160, 48, "#cbd", 1.6, true); }
+      if (G.spotIndex <= 0) { endDay(); return; }
+    }
+  }
+
+  // ---- cutters ----
+  if (lp.cutters > 0 && !frozen) {
+    G.cutterTimer -= dt;
+    if (G.cutterTimer <= 0 && G.cutters.length < lp.cutters) {
+      G.cutterTimer = lp.cutterEvery;
+      spawnCutter();
+    }
+    for (const c of G.cutters) {
+      const ty = spotY(G.spotIndex), tx = SPOT_X;
+      const d = dist(c.x, c.y, tx, ty);
+      const spd = 22 + G.day * 3;
+      c.x += ((tx - c.x) / (d || 1)) * spd * dt;
+      c.y += ((ty - c.y) / (d || 1)) * spd * dt;
+      c.bobT = (c.bobT || 0) + dt;
+      if (d < 11) {
+        // reached the spot: blocked if guarding, standing on spot, or spot held
+        if (G.guarding || onSpot() || G.spotHeld > 0) {
+          c.dead = true;
+          toast("BLOCKED!", tx + 12, ty - 14, "#9ef08a", 1.2);
+        } else {
+          c.dead = true;
+          dropBack(1, "CUT IN LINE! -1");
+        }
+      }
+    }
+    G.cutters = G.cutters.filter((c) => !c.dead);
+  }
+}
+
+function spawnCutter() {
+  // enters from a room edge
+  const fromTop = Math.random() < 0.5;
+  G.cutters.push({
+    x: 120 + Math.random() * 160,
+    y: fromTop ? ROOM.y0 + 2 : ROOM.y1 - 2,
+    pal: CUTTER_PAL, bobT: 0, dead: false,
+  });
+  toast("someone's creeping in…", 160, 42, "#ffb0b0", 1.6, true);
+}
+
+function dropBack(n, msg) {
+  G.spotIndex = Math.min(G.lineLen - 1 + n, G.spotIndex + n);
+  G.lineLen += n;
+  for (let i = 0; i < n; i++) G.npcs.push(makePal(Math.floor(Math.random() * 99999)));
+  if (msg) toast(msg, SPOT_X + 14, spotY(G.spotIndex) - 14, "#f08a8a", 1.6, true);
+}
+
+function endDay() {
+  G.mode = "dayend";
+  if (G.score > G.best) G.best = G.score;
+}
+
+// ------------------------------------------------------------------ render
+function fitCanvas() {
+  SCALE = Math.max(1, Math.floor(Math.min(window.innerWidth / LW, window.innerHeight / LH)));
+  canvas.width = LW * SCALE; canvas.height = LH * SCALE;
+  ctx.imageSmoothingEnabled = false;
+}
+window.addEventListener("resize", fitCanvas);
+
+function rect(x, y, w, h, col) { ctx.fillStyle = col; ctx.fillRect(x * SCALE, y * SCALE, w * SCALE, h * SCALE); }
+function text(str, x, y, size, col, align) {
+  ctx.fillStyle = col; ctx.textAlign = align || "left"; ctx.textBaseline = "alphabetic";
+  ctx.font = "bold " + Math.round(size * SCALE) + "px 'Courier New', monospace";
+  ctx.fillText(str, x * SCALE, y * SCALE);
+}
+
+function render() {
+  // floor
+  rect(0, 0, LW, LH, "#20293a");
+  rect(ROOM.x0, ROOM.y0, ROOM.x1 - ROOM.x0, ROOM.y1 - ROOM.y0, "#2b3446");
+  // floor tiles
+  ctx.fillStyle = "#28313f";
+  for (let y = ROOM.y0; y < ROOM.y1; y += 16)
+    for (let x = ROOM.x0 + ((y / 16) % 2 ? 8 : 0); x < ROOM.x1; x += 16)
+      ctx.fillRect(x * SCALE, y * SCALE, 8 * SCALE, 8 * SCALE);
+
+  // counter (top)
+  rect(0, 0, LW, ROOM.y0, "#3a2e22");
+  rect(0, ROOM.y0 - 4, LW, 4, "#5a4632");
+  text("DMV  —  WINDOW 3", 8, 13, 7, "#e8d24a");
+  // "now serving" bulb
+  rect(230, 5, 84, 11, "#141a12");
+  text("NOW SERVING", 234, 13, 6, "#7dff7d");
+
+  if (G.mode === "title") { renderTitle(); renderHUDBase(); return; }
+
+  // interactables
+  drawBench();
+  drawVending();
+  drawBathroom();
+
+  // line spots + npcs
+  for (let i = G.lineLen - 1; i >= 0; i--) {
+    const y = spotY(i);
+    // spot marker
+    if (i === G.spotIndex) {
+      ctx.fillStyle = "rgba(232,210,74,.22)";
+      ctx.beginPath(); ctx.ellipse(SPOT_X * SCALE, (y + 1) * SCALE, 7 * SCALE, 3 * SCALE, 0, 0, 7); ctx.fill();
+    } else {
+      ctx.fillStyle = "rgba(255,255,255,.05)";
+      ctx.fillRect((SPOT_X - 6) * SCALE, (y - 1) * SCALE, 12 * SCALE, 3 * SCALE);
+    }
+    if (i === G.spotIndex) continue; // player drawn separately
+    drawPerson(SPOT_X, y + 2, G.npcs[i] || makePal(i), Math.sin(i * 1.7) > 0.9 ? 0 : 0);
+  }
+  // rope guides
+  ctx.strokeStyle = "#43506a"; ctx.lineWidth = Math.max(1, SCALE);
+  ctx.beginPath();
+  ctx.moveTo((SPOT_X - 12) * SCALE, (SPOT_Y0 - 4) * SCALE);
+  ctx.lineTo((SPOT_X - 12) * SCALE, spotY(G.lineLen) * SCALE);
+  ctx.moveTo((SPOT_X + 12) * SCALE, (SPOT_Y0 - 4) * SCALE);
+  ctx.lineTo((SPOT_X + 12) * SCALE, spotY(G.lineLen) * SCALE);
+  ctx.stroke();
+
+  // cutters
+  if (G.cutters) for (const c of G.cutters) {
+    drawPerson(c.x, c.y, c.pal, Math.floor(c.bobT * 8) % 2 ? -1 : 0);
+    text("!", c.x, c.y - 14, 8, "#ff6b6b", "center");
+  }
+
+  // player
+  if (!G.bath.active) {
+    const bob = (keys.ArrowUp||keys.ArrowDown||keys.ArrowLeft||keys.ArrowRight) && !G.guarding
+      ? (Math.floor(performance.now()/120)%2?-1:0) : 0;
+    drawPerson(G.player.x, G.player.y, PLAYER_PAL, bob);
+    if (G.guarding) {
+      text("\u{1F6E1}", G.player.x, G.player.y - 15, 9, "#ffe680", "center");
+      rect(G.player.x - 8, G.player.y - PH - 3, 16, 2, "#ffe680");
+    }
+    if (G.reading) text("\u{1F4F0}", G.player.x, G.player.y - 15, 9, "#fff", "center");
+    if (G.spotHeld > 0) { ctx.fillStyle = "rgba(255,230,128,.5)";
+      ctx.fillRect((SPOT_X - 7) * SCALE, (spotY(G.spotIndex) - 1) * SCALE, 14 * SCALE, 3 * SCALE); }
+  } else {
+    // occupant marker at bathroom door
+    text("occupied", BATH.x + 12, BATH.y - 4, 6, "#ff9", "center");
+  }
+
+  renderHUDBase();
+  renderMeters();
+  renderToasts();
+
+  if (G.introT > 0) {
+    ctx.fillStyle = "rgba(8,10,16," + Math.min(0.5, G.introT / 5) + ")";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  if (G.systemDownT > 0) {
+    text("⚠ SYSTEM DOWN ⚠", 160, 100, 11, "#ff6b6b", "center");
+    text("please wait… (line frozen)", 160, 114, 7, "#ffd0d0", "center");
+  }
+
+  if (G.mode === "dayend") renderDayEnd();
+}
+
+function drawBench() {
+  rect(BENCH.x, BENCH.y, BENCH.w, BENCH.h, "#6a4a2c");
+  rect(BENCH.x, BENCH.y, BENCH.w, 3, "#845c38");
+  rect(BENCH.x + 2, BENCH.y + BENCH.h, 3, 4, "#4a3420");
+  rect(BENCH.x + BENCH.w - 5, BENCH.y + BENCH.h, 3, 4, "#4a3420");
+  // newspaper on bench
+  rect(BENCH.x + 16, BENCH.y - 3, 14, 5, "#d8d8cc");
+  ctx.fillStyle = "#888"; ctx.fillRect((BENCH.x + 17) * SCALE, (BENCH.y - 2) * SCALE, 12 * SCALE, SCALE);
+  labelBox("NEWSPAPER", BENCH.x + BENCH.w / 2, BENCH.y + BENCH.h + 9);
+}
+function drawVending() {
+  rect(VENDING.x, VENDING.y, VENDING.w, VENDING.h, "#b0202a");
+  rect(VENDING.x + 3, VENDING.y + 3, VENDING.w - 12, VENDING.h - 14, "#101418");
+  ctx.fillStyle = "#3a5"; for (let i=0;i<6;i++){ ctx.fillRect((VENDING.x+4+ (i%2)*7)*SCALE, (VENDING.y+5+Math.floor(i/2)*5)*SCALE, 5*SCALE, 3*SCALE); }
+  rect(VENDING.x + VENDING.w - 6, VENDING.y + 4, 3, VENDING.h - 20, "#e8d24a");
+  rect(VENDING.x + 2, VENDING.y + VENDING.h - 8, VENDING.w - 4, 5, "#222");
+  labelBox("SNACKS", VENDING.x + VENDING.w / 2, VENDING.y + VENDING.h + 9);
+}
+function drawBathroom() {
+  rect(BATH.x, BATH.y, BATH.w, BATH.h, "#3d4a5c");
+  rect(BATH.x + 2, BATH.y + 2, BATH.w - 4, BATH.h - 4, "#5a6a7c");
+  rect(BATH.x + BATH.w - 7, BATH.y + BATH.h / 2, 2, 3, "#e8d24a"); // handle
+  text("WC", BATH.x + BATH.w / 2, BATH.y + BATH.h / 2 + 2, 7, "#dfe", "center");
+  labelBox("RESTROOM", BATH.x + BATH.w / 2, BATH.y + BATH.h + 9);
+}
+function labelBox(str, cx, cy) { text(str, cx, cy, 5, "#8f9bb0", "center"); }
+
+function renderHUDBase() {
+  // top-right score
+  text("SCORE " + G.score, 314, 13, 7, "#eafce0", "right");
+}
+
+function renderMeters() {
+  const bars = [
+    ["PATIENCE", G.meters.patience, "#e8d24a"],
+    ["HUNGER",   G.meters.hunger,   "#e08a4a"],
+    ["BLADDER",  G.meters.bladder,  "#4ec8e8"],
+    ["BATTERY",  G.meters.battery,  "#6ae08a"],
+  ];
+  const x = 232, w = 82, h = 6;
+  let y = 20;
+  rect(x - 4, y - 4, w + 8, bars.length * 12 + 20, "rgba(10,14,20,.72)");
+  text("DAY " + G.day + "   BEST " + G.best, x, y + 3, 6, "#cdd", "left");
+  y += 8;
+  for (const [name, val, col] of bars) {
+    text(name, x, y + 5, 5, "#aeb8c8", "left");
+    rect(x + 34, y, w - 34, h, "#12161d");
+    const low = val < 25;
+    rect(x + 34, y, Math.max(0, (w - 34) * val / 100), h, low && Math.floor(performance.now()/200)%2 ? "#ff5a5a" : col);
+    rect(x + 34, y, w - 34, 1, "rgba(255,255,255,.12)");
+    y += 12;
+  }
+}
+
+function renderToasts() {
+  for (const t of G.toasts) {
+    const a = Math.min(1, t.life / 0.4);
+    ctx.globalAlpha = a;
+    const yy = t.y - (1 - t.life / t.max) * (t.big ? 6 : 12);
+    if (t.big) {
+      ctx.fillStyle = "rgba(8,10,16,.6)";
+      const wpx = ctx.measureText ? 0 : 0;
+      text(t.text, t.x, yy, 9, t.color, "center");
+    } else {
+      text(t.text, t.x, yy, 7, t.color, "center");
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+function renderTitle() {
+  ctx.fillStyle = "rgba(8,10,16,.5)"; ctx.fillRect(0,0,canvas.width,canvas.height);
+  text("DMV", 160, 62, 34, "#e8d24a", "center");
+  text("SIMULATOR", 160, 84, 16, "#eafce0", "center");
+  text("wait in line · stay sane · lose anyway", 160, 100, 7, "#aeb8c8", "center");
+  const blink = Math.floor(performance.now()/500)%2;
+  if (blink) text("press  ENTER  /  START", 160, 128, 9, "#9ef08a", "center");
+  text("←↑↓→ move   X use   Z text   C guard", 160, 150, 6, "#8f9bb0", "center");
+}
+
+function renderDayEnd() {
+  ctx.fillStyle = "rgba(8,10,16,.78)"; ctx.fillRect(0,0,canvas.width,canvas.height);
+  const reason = G.ragequit ? "YOU RAGE-QUIT THE LINE" : "🔒  DMV CLOSED  🔒";
+  text(reason, 160, 60, 12, G.ragequit ? "#ff8a8a" : "#e8d24a", "center");
+  text("come back tomorrow…", 160, 76, 7, "#cdd", "center");
+  text("Day " + G.day + " points:  " + G.dayScore, 160, 100, 8, "#eafce0", "center");
+  text("TOTAL SCORE:  " + G.score, 160, 116, 10, "#9ef08a", "center");
+  text("BEST:  " + G.best, 160, 130, 7, "#cdd", "center");
+  const blink = Math.floor(performance.now()/500)%2;
+  if (blink) text("press ENTER for DAY " + (G.day + 1), 160, 152, 8, "#ffe680", "center");
+}
+
+// ------------------------------------------------------------------ boot
+G.mode = "title";
+G.best = 0;
+G.score = 0;
+G.toasts = [];
+fitCanvas();
+window.__DMV = G;   // exposed for debugging/automated checks
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
