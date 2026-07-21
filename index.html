@@ -196,7 +196,12 @@ function resetGame() {
   newDay(1);
 }
 
-function spotY(i) { return SPOT_Y0 + i * SPOT_DY; }
+function spotY(i) {
+  const capacity = Math.floor((ROOM.y1 - SPOT_Y0) / SPOT_DY) + 1;  // spots that fit at normal spacing
+  if (G.lineLen <= capacity) return SPOT_Y0 + i * SPOT_DY;         // unchanged for short lines
+  // line is too long to fit at normal spacing: compress it to fit the room
+  return SPOT_Y0 + (i / Math.max(1, G.lineLen - 1)) * (ROOM.y1 - 6 - SPOT_Y0);
+}
 
 function toast(text, x, y, color, life, big) {
   G.toasts.push({ text, x, y, color: color || "#fff", life: life || 1.1, max: life || 1.1, big: !!big });
