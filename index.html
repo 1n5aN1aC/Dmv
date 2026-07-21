@@ -292,6 +292,9 @@ function updatePlay(dt) {
       G.bath.active = false;
       m.bladder = 100;
       toast("relief!", G.player.x, G.player.y - 16, "#9ef", 1.2);
+      // discard any USE presses that piled up while the sequence was
+      // playing out, so stepping out doesn't immediately re-trigger it
+      edge.KeyX = false;
     }
     // during bathroom you cannot act; cutters still resolve below
   } else if (G.reading) {
