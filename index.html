@@ -303,9 +303,9 @@ function updatePlay(dt) {
       addScore(25, BENCH.x + BENCH.w / 2, BENCH.y - 8);
       toast("...interesting...", BENCH.x + BENCH.w / 2, BENCH.y - 18, "#cde", 1.1);
     }
-    // exit reading on movement (held or tapped) or USE
+    // exit reading on a fresh movement key-press or USE
     const movedTap = pressed("ArrowUp") | pressed("ArrowDown") | pressed("ArrowLeft") | pressed("ArrowRight");
-    if (movedTap || pressed("KeyX") || keys.ArrowUp || keys.ArrowDown || keys.ArrowLeft || keys.ArrowRight) {
+    if (movedTap || pressed("KeyX")) {
       G.reading = false;
     }
   } else {
@@ -333,6 +333,10 @@ function updatePlay(dt) {
     if (pressed("KeyX")) {
       if (nearRect(G.player.x, G.player.y, BENCH)) {
         G.reading = true; G.readTimer = 0.6;
+        // clear stale arrow-key edges left over from walking here, so a
+        // key still held from the approach doesn't look like a fresh
+        // "leave" tap on the very next frame
+        edge.ArrowUp = edge.ArrowDown = edge.ArrowLeft = edge.ArrowRight = false;
       } else if (nearRect(G.player.x, G.player.y, VENDING)) {
         if (G.vendCd <= 0) {
           m.hunger = 100; G.vendCd = 6;
